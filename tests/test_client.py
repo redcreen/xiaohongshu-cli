@@ -455,3 +455,51 @@ class TestReadingEndpointBehavior:
             client.close()
 
         assert result["items"][0]["note_card"]["title"] == "browser-ok"
+
+    def test_get_note_detail_uses_live_chrome_refreshed_url_before_browser_context(self, monkeypatch):
+        calls = []
+
+        def fake_get_note_by_id(self, note_id, xsec_token="", xsec_source="pc_feed"):
+            calls.append(("feed", note_id, xsec_token, xsec_source))
+            if xsec_token == "fresh-token":
+                return {"items": [{"note_card": {"title": "feed-ok"}}]}
+            return {"items": []}
+
+        def fake_resolve_xsec_context(self, note_id, preferred_token="", preferred_source="", note_url=""):
+            calls.append(("resolve", note_id, preferred_token, preferred_source, note_url))
+            return "", preferred_source or "pc_search"
+
+        def fake_get_note_from_html(self, note_id, xsec_token="", xsec_source="pc_feed"):
+            calls.append(("html", note_id, xsec_token, xsec_source))
+            return {}
+
+        monkeypatch.setattr(XhsClient, "get_note_by_id", fake_get_note_by_id)
+        monkeypatch.setattr(XhsClient, "resolve_xsec_context", fake_resolve_xsec_context)
+        monkeypatch.setattr(XhsClient, "get_note_from_html", fake_get_note_from_html)
+        monkeypatch.setattr(
+            "xhs_cli.client_mixins.refresh_note_url_via_live_chrome",
+            lambda **kwargs: "https://www.xiaohongshu.com/explore/note-123?xsec_token=fresh-token&xsec_source=pc_share",
+        )
+
+        client = XhsClient(
+            {"a1": "cookie"},
+            enable_browser_context_fallback=True,
+            enable_live_chrome_xsec_refresh=True,
+        )
+        try:
+            result = client.get_note_detail(
+                "note-123",
+                xsec_token="token-old",
+                xsec_source="pc_search",
+                note_url="https://www.xiaohongshu.com/search_result/note-123?xsec_token=token-old&xsec_source=pc_search",
+            )
+        finally:
+            client.close()
+
+        assert result["items"][0]["note_card"]["title"] == "feed-ok"
+        assert calls == [
+            ("feed", "note-123", "token-old", "pc_search"),
+            ("resolve", "note-123", "", "pc_search", "https://www.xiaohongshu.com/search_result/note-123?xsec_token=token-old&xsec_source=pc_search"),
+            ("html", "note-123", "", "pc_search"),
+            ("feed", "note-123", "fresh-token", "pc_share"),
+        ]

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import time
 from typing import Any
@@ -35,6 +36,7 @@ from .exceptions import (
 from .signing import build_get_uri, sign_main_api
 
 logger = logging.getLogger(__name__)
+_LIVE_CHROME_REFRESH_ENV = "XHS_ENABLE_LIVE_CHROME_XSEC_REFRESH"
 
 
 def _is_session_expired_error(code: Any, message: str) -> bool:
@@ -63,6 +65,7 @@ class XhsClient(
         max_retries: int = 3,
         browser_profile_dir: str | None = None,
         enable_browser_context_fallback: bool = True,
+        enable_live_chrome_xsec_refresh: bool | None = None,
     ):
         self.cookies = cookies
         self._http = httpx.Client(timeout=timeout, follow_redirects=True)
@@ -74,6 +77,11 @@ class XhsClient(
         self._request_count = 0
         self.browser_profile_dir = browser_profile_dir
         self.enable_browser_context_fallback = bool(enable_browser_context_fallback)
+        if enable_live_chrome_xsec_refresh is None:
+            value = str(os.environ.get(_LIVE_CHROME_REFRESH_ENV, "")).strip().lower()
+            self.enable_live_chrome_xsec_refresh = value in {"1", "true", "yes", "on"}
+        else:
+            self.enable_live_chrome_xsec_refresh = bool(enable_live_chrome_xsec_refresh)
 
     def close(self) -> None:
         self._http.close()

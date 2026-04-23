@@ -23,7 +23,9 @@ from .cookies import (
     invalidate_note_context,
 )
 from .exceptions import NeedVerifyError, SessionExpiredError, UnsupportedOperationError, XhsApiError
+from .formatter import parse_note_reference
 from .html_parser import extract_note_from_html
+from .live_chrome_refresh import refresh_note_url_via_live_chrome
 
 logger = logging.getLogger(__name__)
 
@@ -419,11 +421,36 @@ class ReadingEndpointsMixin:
         response = self.get_note_from_html(note_id, xsec_token="", xsec_source=source)
         if self._has_note_detail_content(response):
             return response
+        live_refreshed_url = ""
+        if note_url and getattr(self, "enable_live_chrome_xsec_refresh", False):
+            try:
+                live_refreshed_url = refresh_note_url_via_live_chrome(
+                    note_id=note_id,
+                    note_url=note_url,
+                )
+            except XhsApiError as exc:
+                logger.info("Live Chrome xsec refresh failed (%s)", exc)
+            if live_refreshed_url:
+                logger.info("Live Chrome refresh resolved a fresh note URL; retrying feed API")
+                _ref_note_id, live_token, live_source = parse_note_reference(live_refreshed_url)
+                if live_token:
+                    cache_note_context(note_id, live_token, live_source)
+                    try:
+                        response = self.get_note_by_id(
+                            note_id,
+                            xsec_token=live_token,
+                            xsec_source=live_source or source,
+                        )
+                        if self._has_note_detail_content(response):
+                            return response
+                    except (NeedVerifyError, XhsApiError) as exc:
+                        logger.info("Live Chrome refreshed feed API failed (%s)", exc)
+                note_url = live_refreshed_url
         if getattr(self, "enable_browser_context_fallback", False):
             logger.info("HTML fallback still has no note data, trying browser-context fallback")
             return get_note_detail_via_browser(
                 note_id=note_id,
-                note_url=note_url,
+                note_url=live_refreshed_url or note_url,
                 cookies=getattr(self, "cookies", {}) or {},
             )
         raise XhsApiError("No note data found after refreshing xsec context")
