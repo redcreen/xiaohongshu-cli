@@ -60,3 +60,19 @@ class TestParseNoteReference:
         assert note_id == "abc123"
         assert token == "token-1"
         assert source == "pc_search"
+
+    def test_infers_pc_search_for_search_result_links_without_source(self):
+        note_id, token, source = parse_note_reference(
+            "https://www.xiaohongshu.com/search_result/abc123?xsec_token=token-1&xsec_source="
+        )
+        assert note_id == "abc123"
+        assert token == "token-1"
+        assert source == "pc_search"
+
+    def test_infers_pc_share_for_discovery_links_without_source(self):
+        note_id, token, source = parse_note_reference(
+            "https://www.xiaohongshu.com/discovery/item/abc123?xsec_token=token-1"
+        )
+        assert note_id == "abc123"
+        assert token == "token-1"
+        assert source == "pc_share"

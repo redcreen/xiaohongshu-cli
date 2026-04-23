@@ -37,6 +37,20 @@ from .formatter_utils import (  # noqa: F401
 # ─── URL parsing ────────────────────────────────────────────────────────────
 
 
+def _infer_xsec_source(path: str, explicit_source: str) -> str:
+    source = str(explicit_source or "").strip()
+    if source:
+        return source
+    normalized_path = str(path or "").rstrip("/")
+    if normalized_path.startswith("/search_result/"):
+        return "pc_search"
+    if normalized_path.startswith("/discovery/item/"):
+        return "pc_share"
+    if normalized_path.startswith("/explore/"):
+        return "pc_feed"
+    return ""
+
+
 def parse_note_reference(id_or_url: str) -> tuple[str, str, str]:
     """Extract note ID, xsec_token, and xsec_source from a URL or plain ID."""
     if "xiaohongshu.com" in id_or_url:
@@ -47,7 +61,7 @@ def parse_note_reference(id_or_url: str) -> tuple[str, str, str]:
         note_id = parts[-1]
         qs = parse_qs(parsed.query)
         xsec_token = qs.get("xsec_token", [""])[0]
-        xsec_source = qs.get("xsec_source", [""])[0]
+        xsec_source = _infer_xsec_source(parsed.path, qs.get("xsec_source", [""])[0])
         return note_id, xsec_token, xsec_source
     return id_or_url, "", ""
 
