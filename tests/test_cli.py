@@ -79,7 +79,10 @@ class TestCliBasic:
                 return {"nickname": "Alice", "red_id": "alice001"}
 
         monkeypatch.setattr("xhs_cli.commands._common.get_cookies", fake_get_cookies)
-        monkeypatch.setattr("xhs_cli.commands._common.XhsClient", lambda cookies: FakeClient())
+        monkeypatch.setattr(
+            "xhs_cli.commands._common.XhsClient",
+            lambda cookies, **kwargs: FakeClient(),
+        )
 
         result = runner.invoke(cli, ["--cookie-source", "chrome", "--browser-profile-dir", "/tmp/Profile 1", "status", "--yaml"])
 

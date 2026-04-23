@@ -45,7 +45,7 @@ def get_client(ctx, *, force_refresh: bool = False) -> XhsClient:
         force_refresh=force_refresh,
         browser_profile_dir=_browser_profile_dir(ctx),
     )
-    return XhsClient(cookies)
+    return XhsClient(cookies, browser_profile_dir=_browser_profile_dir(ctx))
 
 
 def run_client_action(ctx, action: Callable[[XhsClient], T]) -> T:

@@ -393,3 +393,65 @@ class TestReadingEndpointBehavior:
             ("resolve", "note-123", "", "pc_search", ""),
             ("feed", "note-123", "fresh-token", "pc_search"),
         ]
+
+    def test_get_note_detail_uses_browser_context_after_html_fallback_is_empty(self, monkeypatch):
+        def fake_get_note_by_id(self, note_id, xsec_token="", xsec_source="pc_feed"):
+            return {"items": []}
+
+        def fake_resolve_xsec_context(self, note_id, preferred_token="", preferred_source="", note_url=""):
+            return "", preferred_source or "pc_search"
+
+        def fake_get_note_from_html(self, note_id, xsec_token="", xsec_source="pc_feed"):
+            return {}
+
+        monkeypatch.setattr(XhsClient, "get_note_by_id", fake_get_note_by_id)
+        monkeypatch.setattr(XhsClient, "resolve_xsec_context", fake_resolve_xsec_context)
+        monkeypatch.setattr(XhsClient, "get_note_from_html", fake_get_note_from_html)
+        monkeypatch.setattr(
+            "xhs_cli.client_mixins.get_note_detail_via_browser",
+            lambda **kwargs: {"items": [{"note_card": {"title": "browser-ok"}}]},
+        )
+
+        client = XhsClient({"a1": "cookie"}, enable_browser_context_fallback=True)
+        try:
+            result = client.get_note_detail(
+                "note-123",
+                xsec_token="token-old",
+                xsec_source="pc_search",
+                note_url="https://www.xiaohongshu.com/search_result/note-123?xsec_token=token-old&xsec_source=pc_search",
+            )
+        finally:
+            client.close()
+
+        assert result["items"][0]["note_card"]["title"] == "browser-ok"
+
+    def test_get_note_detail_uses_browser_context_after_empty_wrapped_html_note(self, monkeypatch):
+        def fake_get_note_by_id(self, note_id, xsec_token="", xsec_source="pc_feed"):
+            return {"items": []}
+
+        def fake_resolve_xsec_context(self, note_id, preferred_token="", preferred_source="", note_url=""):
+            return "", preferred_source or "pc_search"
+
+        def fake_get_note_from_html(self, note_id, xsec_token="", xsec_source="pc_feed"):
+            return {"items": [{"id": note_id, "note_card": {}}]}
+
+        monkeypatch.setattr(XhsClient, "get_note_by_id", fake_get_note_by_id)
+        monkeypatch.setattr(XhsClient, "resolve_xsec_context", fake_resolve_xsec_context)
+        monkeypatch.setattr(XhsClient, "get_note_from_html", fake_get_note_from_html)
+        monkeypatch.setattr(
+            "xhs_cli.client_mixins.get_note_detail_via_browser",
+            lambda **kwargs: {"items": [{"note_card": {"title": "browser-ok"}}]},
+        )
+
+        client = XhsClient({"a1": "cookie"}, enable_browser_context_fallback=True)
+        try:
+            result = client.get_note_detail(
+                "note-123",
+                xsec_token="token-old",
+                xsec_source="pc_search",
+                note_url="https://www.xiaohongshu.com/search_result/note-123?xsec_token=token-old&xsec_source=pc_search",
+            )
+        finally:
+            client.close()
+
+        assert result["items"][0]["note_card"]["title"] == "browser-ok"

@@ -61,6 +61,8 @@ class XhsClient(
         timeout: float = 30.0,
         request_delay: float = 1.0,
         max_retries: int = 3,
+        browser_profile_dir: str | None = None,
+        enable_browser_context_fallback: bool = True,
     ):
         self.cookies = cookies
         self._http = httpx.Client(timeout=timeout, follow_redirects=True)
@@ -70,6 +72,8 @@ class XhsClient(
         self._last_request_time = 0.0
         self._verify_count = 0
         self._request_count = 0
+        self.browser_profile_dir = browser_profile_dir
+        self.enable_browser_context_fallback = bool(enable_browser_context_fallback)
 
     def close(self) -> None:
         self._http.close()

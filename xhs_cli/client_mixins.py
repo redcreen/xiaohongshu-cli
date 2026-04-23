@@ -13,6 +13,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
+from .browser_context import get_note_detail_via_browser
 from .constants import CREATOR_HOST, HOME_URL, UPLOAD_HOST, USER_AGENT
 from .cookies import (
     cache_note_context,
@@ -200,7 +201,13 @@ class ReadingEndpointsMixin:
             return False
         items = payload.get("items")
         if isinstance(items, list) and items:
-            return True
+            first = items[0] if isinstance(items[0], dict) else {}
+            note = first.get("note_card") if isinstance(first, dict) else {}
+            if isinstance(note, dict):
+                return any(
+                    note.get(key)
+                    for key in ("title", "desc", "user", "image_list", "video", "note_id", "interact_info")
+                )
         return bool(payload.get("noteId") or payload.get("note_id") or payload.get("title"))
 
     def _search_request_id(self) -> str:
@@ -369,7 +376,8 @@ class ReadingEndpointsMixin:
     ) -> dict[str, Any]:
         """Fetch note by parsing server-rendered HTML (no xsec_token required)."""
         html, final_url = self._fetch_note_html(note_id, xsec_token=xsec_token, xsec_source=xsec_source)
-        return extract_note_from_html(html, note_id, final_url=final_url)
+        note = extract_note_from_html(html, note_id, final_url=final_url)
+        return {"items": [{"id": str(note.get("note_id", note.get("id", note_id))), "note_card": note}]}
 
     def get_note_detail(
         self,
@@ -411,6 +419,13 @@ class ReadingEndpointsMixin:
         response = self.get_note_from_html(note_id, xsec_token="", xsec_source=source)
         if self._has_note_detail_content(response):
             return response
+        if getattr(self, "enable_browser_context_fallback", False):
+            logger.info("HTML fallback still has no note data, trying browser-context fallback")
+            return get_note_detail_via_browser(
+                note_id=note_id,
+                note_url=note_url,
+                cookies=getattr(self, "cookies", {}) or {},
+            )
         raise XhsApiError("No note data found after refreshing xsec context")
 
     def get_home_feed(self, category: str = "homefeed_recommend") -> dict[str, Any]:
