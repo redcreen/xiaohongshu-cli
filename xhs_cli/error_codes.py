@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .exceptions import (
+    AccessTooFrequentError,
     IpBlockedError,
     NeedVerifyError,
     NoCookieError,
@@ -19,6 +20,8 @@ def error_code_for_exception(exc: Exception) -> str:
         return "not_authenticated"
     if isinstance(exc, NeedVerifyError):
         return "verification_required"
+    if isinstance(exc, AccessTooFrequentError):
+        return "rate_limited"
     if isinstance(exc, IpBlockedError):
         return "ip_blocked"
     if isinstance(exc, SignatureError):
@@ -29,6 +32,7 @@ def error_code_for_exception(exc: Exception) -> str:
         if exc.code in {
             "not_authenticated",
             "verification_required",
+            "rate_limited",
             "ip_blocked",
             "signature_error",
             "unsupported_operation",

@@ -33,6 +33,13 @@ class IpBlockedError(XhsApiError):
         super().__init__("IP blocked by XHS — try a different network", code=300012)
 
 
+class AccessTooFrequentError(XhsApiError):
+    """Raised when XHS serves the website-login frequency-limit page."""
+
+    def __init__(self, code: int | str = 300013, message: str = "Access too frequent — please retry later"):
+        super().__init__(message, code=code)
+
+
 class SignatureError(XhsApiError):
     """Raised when signature verification fails."""
 

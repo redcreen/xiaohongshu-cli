@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+from urllib.parse import parse_qs, urlparse
 from typing import Any
 
-from .exceptions import XhsApiError
+from .exceptions import AccessTooFrequentError, XhsApiError
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +21,31 @@ logger = logging.getLogger(__name__)
 _STATE_PATTERN = re.compile(r"window\.__INITIAL_STATE__=({.*?})\s*</script>", re.DOTALL)
 
 
-def parse_initial_state(html: str) -> dict[str, Any]:
+def raise_if_frequency_limit_page(html: str, *, final_url: str = "") -> None:
+    """Detect Xiaohongshu website-login frequency-limit pages served with HTTP 200."""
+    parsed = urlparse(final_url) if final_url else None
+    if parsed and parsed.path == "/website-login/error":
+        query = parse_qs(parsed.query)
+        error_code = str((query.get("error_code") or [""])[0]).strip()
+        error_msg = str((query.get("error_msg") or [""])[0]).strip()
+        if error_code == "300013":
+            raise AccessTooFrequentError(
+                code=error_code,
+                message=error_msg or "Access too frequent — please retry later",
+            )
+
+    if "website-login/error" in html and "300013" in html:
+        raise AccessTooFrequentError()
+
+
+def parse_initial_state(html: str, *, final_url: str = "") -> dict[str, Any]:
     """Extract and parse `window.__INITIAL_STATE__` from an XHS note page.
 
     The server-rendered HTML contains a global state object with note data.
     XHS uses bare `undefined` values in the JS object which are not valid JSON,
     so we replace them before parsing.
     """
+    raise_if_frequency_limit_page(html, final_url=final_url)
     match = _STATE_PATTERN.search(html)
     if not match:
         raise XhsApiError("Could not parse __INITIAL_STATE__ from HTML")
@@ -67,7 +86,7 @@ def extract_note_from_state(
     raise XhsApiError("Note not found in HTML state")
 
 
-def extract_note_from_html(html: str, note_id: str) -> dict[str, Any]:
+def extract_note_from_html(html: str, note_id: str, *, final_url: str = "") -> dict[str, Any]:
     """High-level: parse HTML → extract note in one step."""
-    state = parse_initial_state(html)
+    state = parse_initial_state(html, final_url=final_url)
     return extract_note_from_state(state, note_id)

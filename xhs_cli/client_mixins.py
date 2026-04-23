@@ -202,7 +202,7 @@ class ReadingEndpointsMixin:
         note_id: str,
         xsec_token: str = "",
         xsec_source: str = "pc_feed",
-    ) -> str:
+    ) -> tuple[str, str]:
         if xsec_token:
             url = f"{HOME_URL}/explore/{note_id}?xsec_token={xsec_token}&xsec_source={xsec_source}"
         else:
@@ -217,7 +217,7 @@ class ReadingEndpointsMixin:
                 "cookie": cookies_to_string(self.cookies),
             },
         )
-        return resp.text
+        return resp.text, str(resp.url)
 
     def resolve_xsec_context(
         self,
@@ -234,7 +234,7 @@ class ReadingEndpointsMixin:
         if cached.get("token"):
             return cached["token"], cached.get("source", "")
 
-        html = self._fetch_note_html(note_id)
+        html, _final_url = self._fetch_note_html(note_id)
         patterns = [
             r'"xsec_token"\s*:\s*"([^"]+)"',
             r"xsec_token=([^&\"']+)",
@@ -338,8 +338,8 @@ class ReadingEndpointsMixin:
         xsec_source: str = "pc_feed",
     ) -> dict[str, Any]:
         """Fetch note by parsing server-rendered HTML (no xsec_token required)."""
-        html = self._fetch_note_html(note_id, xsec_token=xsec_token, xsec_source=xsec_source)
-        return extract_note_from_html(html, note_id)
+        html, final_url = self._fetch_note_html(note_id, xsec_token=xsec_token, xsec_source=xsec_source)
+        return extract_note_from_html(html, note_id, final_url=final_url)
 
     def get_note_detail(
         self,
