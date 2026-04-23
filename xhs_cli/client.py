@@ -37,6 +37,14 @@ from .signing import build_get_uri, sign_main_api
 logger = logging.getLogger(__name__)
 
 
+def _is_session_expired_error(code: Any, message: str) -> bool:
+    normalized_code = str(code).strip().lower() if code is not None else ""
+    normalized_message = str(message).strip().lower()
+    return normalized_code in {"-100", "not_authenticated", "session_expired"} or (
+        "session expired" in normalized_message
+    )
+
+
 class XhsClient(
     ReadingEndpointsMixin,
     InteractionEndpointsMixin,
@@ -137,11 +145,12 @@ class XhsClient(
             return data.get("data", data.get("success"))
 
         code = data.get("code")
+        message = str(data.get("msg") or data.get("message") or "")
         if code == 300012:
             raise IpBlockedError()
         if code == 300015:
             raise SignatureError()
-        if code == -100:
+        if _is_session_expired_error(code, message):
             raise SessionExpiredError()
 
         raise XhsApiError(

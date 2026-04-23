@@ -10,7 +10,9 @@ from xhs_cli.cookies import (
     cache_note_context,
     clear_cookies,
     cookies_to_string,
+    extract_browser_cookies,
     get_cached_note_context,
+    get_config_dir,
     get_cached_xsec_token,
     get_cookies,
     get_index_cache_path,
@@ -89,7 +91,7 @@ class TestGetCookies:
         monkeypatch.setattr("xhs_cli.cookies.load_saved_cookies", lambda: {"a1": "saved"})
         monkeypatch.setattr(
             "xhs_cli.cookies.extract_browser_cookies",
-            lambda source: ("chrome", {"a1": "fresh"}),
+            lambda source, **kwargs: ("chrome", {"a1": "fresh"}),
         )
 
         browser, cookies = get_cookies("chrome")
@@ -100,7 +102,7 @@ class TestGetCookies:
         monkeypatch.setattr("xhs_cli.cookies.load_saved_cookies", lambda: {"a1": "saved"})
         monkeypatch.setattr(
             "xhs_cli.cookies.extract_browser_cookies",
-            lambda source: ("chrome", {"a1": "fresh"}),
+            lambda source, **kwargs: ("chrome", {"a1": "fresh"}),
         )
         saved = []
         monkeypatch.setattr("xhs_cli.cookies.save_cookies", lambda cookies: saved.append(cookies))
@@ -109,6 +111,57 @@ class TestGetCookies:
         assert browser == "chrome"
         assert cookies == {"a1": "fresh"}
         assert saved == [{"a1": "fresh"}]
+
+    def test_forwards_browser_profile_dir_to_extractor(self, monkeypatch):
+        monkeypatch.setattr("xhs_cli.cookies.load_saved_cookies", lambda: None)
+        captured = {}
+
+        def fake_extract(source, **kwargs):
+            captured["source"] = source
+            captured.update(kwargs)
+            return ("chrome", {"a1": "fresh"})
+
+        monkeypatch.setattr("xhs_cli.cookies.extract_browser_cookies", fake_extract)
+        monkeypatch.setattr("xhs_cli.cookies.save_cookies", lambda cookies: None)
+
+        browser, cookies = get_cookies("chrome", browser_profile_dir="/tmp/Profile 1")
+        assert browser == "chrome"
+        assert cookies == {"a1": "fresh"}
+        assert captured["source"] == "chrome"
+        assert captured["browser_profile_dir"] == "/tmp/Profile 1"
+
+
+class TestConfigDir:
+    def test_get_config_dir_honors_env_override(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("XHS_CONFIG_DIR", str(tmp_path / "xhs-config"))
+
+        config_dir = get_config_dir()
+
+        assert config_dir == tmp_path / "xhs-config"
+        assert config_dir.is_dir()
+
+
+class TestBrowserProfileExtraction:
+    def test_extract_browser_cookies_uses_explicit_profile_dir(self, monkeypatch, tmp_path):
+        profile_dir = tmp_path / "Profile 1"
+        profile_dir.mkdir(parents=True)
+        (profile_dir / "Cookies").write_text("", encoding="utf-8")
+        (profile_dir.parent / "Local State").write_text("{}", encoding="utf-8")
+
+        captured = {}
+
+        def fake_loader(**kwargs):
+            captured.update(kwargs)
+            return [type("Cookie", (), {"name": "a1", "value": "cookie-a1", "domain": ".xiaohongshu.com"})()]
+
+        monkeypatch.setattr("xhs_cli.cookies._get_browser_loader", lambda source: fake_loader)
+
+        result = extract_browser_cookies("chrome", browser_profile_dir=str(profile_dir))
+
+        assert result == ("chrome", {"a1": "cookie-a1"})
+        assert captured["domain_name"] == ".xiaohongshu.com"
+        assert captured["cookie_file"] == str(profile_dir / "Cookies")
+        assert captured["key_file"] == str(profile_dir.parent / "Local State")
 
 
 class TestNoteContextCache:

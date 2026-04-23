@@ -56,11 +56,18 @@ _fix_windows_encoding()
     show_default=True,
     help="Browser to read cookies from (auto = try all installed browsers)",
 )
+@click.option(
+    "--browser-profile-dir",
+    type=click.Path(path_type=str),
+    default=None,
+    help="Explicit Chrome-family profile directory to read cookies from.",
+)
 @click.pass_context
-def cli(ctx, verbose: bool, cookie_source: str):
+def cli(ctx, verbose: bool, cookie_source: str, browser_profile_dir: str | None):
     """xhs — Xiaohongshu CLI via reverse-engineered API 📕"""
     ctx.ensure_object(dict)
     ctx.obj["cookie_source"] = cookie_source
+    ctx.obj["browser_profile_dir"] = browser_profile_dir
 
     if verbose:
         logging.basicConfig(level=logging.DEBUG, format="%(name)s %(message)s")

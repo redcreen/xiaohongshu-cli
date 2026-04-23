@@ -7,7 +7,7 @@ import pytest
 
 from xhs_cli.client import XhsClient
 from xhs_cli.cookies import cache_note_context, get_cached_note_context
-from xhs_cli.exceptions import UnsupportedOperationError, XhsApiError
+from xhs_cli.exceptions import SessionExpiredError, UnsupportedOperationError, XhsApiError
 
 
 class TestFavorites:
@@ -100,6 +100,36 @@ class TestTransportCookies:
         assert client.cookies["web_session"] == "real-session"
         assert client.cookies["web_session_sec"] == "real-sec"
 
+    def test_handle_response_treats_not_authenticated_as_session_expired(self):
+        request = httpx.Request("GET", "https://edith.xiaohongshu.com/api/test")
+        response = httpx.Response(
+            200,
+            json={"success": False, "code": "not_authenticated", "message": "Session expired — please re-login"},
+            request=request,
+        )
+
+        client = XhsClient({"a1": "cookie"}, request_delay=0)
+        try:
+            with pytest.raises(SessionExpiredError):
+                client._handle_response(response)
+        finally:
+            client.close()
+
+    def test_handle_response_treats_session_expired_message_as_session_expired(self):
+        request = httpx.Request("GET", "https://edith.xiaohongshu.com/api/test")
+        response = httpx.Response(
+            200,
+            json={"success": False, "code": "api_error", "message": "Session expired — please re-login"},
+            request=request,
+        )
+
+        client = XhsClient({"a1": "cookie"}, request_delay=0)
+        try:
+            with pytest.raises(SessionExpiredError):
+                client._handle_response(response)
+        finally:
+            client.close()
+
 
 class TestReadingEndpointBehavior:
     def test_get_note_detail_prefers_cached_xsec_source(self, monkeypatch):
@@ -125,6 +155,57 @@ class TestReadingEndpointBehavior:
             "token": "token-xyz",
             "source": "pc_search",
         }
+
+    def test_get_comments_warms_note_detail_after_session_expired(self, monkeypatch):
+        calls = []
+
+        def fake_get(self, uri, params=None):
+            calls.append((uri, dict(params or {})))
+            if uri == "/api/sns/web/v2/comment/page" and len(calls) == 1:
+                raise SessionExpiredError()
+            return {"comments": [{"id": "comment-1"}], "has_more": False}
+
+        def fake_get_note_detail(self, note_id, xsec_token="", xsec_source=""):
+            calls.append(("warm", {"note_id": note_id, "xsec_token": xsec_token, "xsec_source": xsec_source}))
+            cache_note_context(note_id, "token-refreshed", xsec_source or "pc_search")
+            return {"note_id": note_id}
+
+        monkeypatch.setattr(XhsClient, "_main_api_get", fake_get)
+        monkeypatch.setattr(XhsClient, "get_note_detail", fake_get_note_detail)
+
+        client = XhsClient({"a1": "cookie"})
+        try:
+            data = client.get_comments("note-123", xsec_token="token-old", xsec_source="pc_search")
+        finally:
+            client.close()
+
+        assert data["comments"] == [{"id": "comment-1"}]
+        assert calls[0] == (
+            "/api/sns/web/v2/comment/page",
+            {
+                "note_id": "note-123",
+                "cursor": "",
+                "top_comment_id": "",
+                "image_formats": "jpg,webp,avif",
+                "xsec_token": "token-old",
+                "xsec_source": "pc_search",
+            },
+        )
+        assert calls[1] == (
+            "warm",
+            {"note_id": "note-123", "xsec_token": "token-old", "xsec_source": "pc_search"},
+        )
+        assert calls[2] == (
+            "/api/sns/web/v2/comment/page",
+            {
+                "note_id": "note-123",
+                "cursor": "",
+                "top_comment_id": "",
+                "image_formats": "jpg,webp,avif",
+                "xsec_token": "token-refreshed",
+                "xsec_source": "pc_search",
+            },
+        )
 
     def test_search_notes_uses_browser_like_prewarm_sequence(self, monkeypatch):
         calls = []

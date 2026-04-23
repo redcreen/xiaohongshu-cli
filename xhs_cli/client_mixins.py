@@ -21,7 +21,7 @@ from .cookies import (
     get_config_dir,
     invalidate_note_context,
 )
-from .exceptions import NeedVerifyError, UnsupportedOperationError, XhsApiError
+from .exceptions import NeedVerifyError, SessionExpiredError, UnsupportedOperationError, XhsApiError
 from .html_parser import extract_note_from_html
 
 logger = logging.getLogger(__name__)
@@ -402,15 +402,33 @@ class ReadingEndpointsMixin:
             )
         if source:
             cache_note_context(note_id, token, source)
-        try:
-            return self._main_api_get("/api/sns/web/v2/comment/page", {
+
+        def _request_comments(active_token: str) -> Any:
+            payload = {
                 "note_id": note_id,
                 "cursor": cursor,
                 "top_comment_id": top_comment_id,
                 "image_formats": "jpg,webp,avif",
-                "xsec_token": token,
-            })
-        except (NeedVerifyError, XhsApiError):
+                "xsec_token": active_token,
+            }
+            if source:
+                payload["xsec_source"] = source
+            return self._main_api_get("/api/sns/web/v2/comment/page", payload)
+
+        try:
+            return _request_comments(token)
+        except NeedVerifyError:
+            raise
+        except SessionExpiredError:
+            # Warm the note detail in-process so response cookies and token cache can refresh
+            self.get_note_detail(note_id, xsec_token=token, xsec_source=source)
+            refreshed_token, refreshed_source = self.resolve_xsec_context(note_id, "", source)
+            if not refreshed_token:
+                raise
+            if refreshed_source:
+                cache_note_context(note_id, refreshed_token, refreshed_source)
+            return _request_comments(refreshed_token)
+        except XhsApiError:
             if not used_cached_context:
                 raise
             invalidate_note_context(note_id)
@@ -419,13 +437,7 @@ class ReadingEndpointsMixin:
                 raise
             if refreshed_source:
                 cache_note_context(note_id, refreshed_token, refreshed_source)
-            return self._main_api_get("/api/sns/web/v2/comment/page", {
-                "note_id": note_id,
-                "cursor": cursor,
-                "top_comment_id": top_comment_id,
-                "image_formats": "jpg,webp,avif",
-                "xsec_token": refreshed_token,
-            })
+            return _request_comments(refreshed_token)
 
     def get_all_comments(
         self,

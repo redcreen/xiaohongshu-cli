@@ -44,6 +44,7 @@ class TestCliBasic:
         assert "xhs" in result.output
         assert "search" in result.output
         assert "read" in result.output
+        assert "--browser-profile-dir" in result.output
 
     def test_search_help(self):
         result = runner.invoke(cli, ["search", "--help"])
@@ -57,6 +58,37 @@ class TestCliBasic:
     def test_login_help(self):
         result = runner.invoke(cli, ["login", "--help"])
         assert result.exit_code == 0
+
+    def test_status_uses_explicit_browser_profile_dir(self, monkeypatch):
+        captured = {}
+
+        def fake_get_cookies(source, force_refresh=False, browser_profile_dir=None):
+            captured["source"] = source
+            captured["force_refresh"] = force_refresh
+            captured["browser_profile_dir"] = browser_profile_dir
+            return "chrome", {"a1": "cookie-a1"}
+
+        class FakeClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def get_self_info(self):
+                return {"nickname": "Alice", "red_id": "alice001"}
+
+        monkeypatch.setattr("xhs_cli.commands._common.get_cookies", fake_get_cookies)
+        monkeypatch.setattr("xhs_cli.commands._common.XhsClient", lambda cookies: FakeClient())
+
+        result = runner.invoke(cli, ["--cookie-source", "chrome", "--browser-profile-dir", "/tmp/Profile 1", "status", "--yaml"])
+
+        assert result.exit_code == 0
+        assert captured == {
+            "source": "chrome",
+            "force_refresh": False,
+            "browser_profile_dir": "/tmp/Profile 1",
+        }
 
     def test_status_help(self):
         result = runner.invoke(cli, ["status", "--help"])
@@ -132,7 +164,7 @@ class TestCliBasic:
         monkeypatch.setenv("OUTPUT", "auto")
         monkeypatch.setattr(
             "xhs_cli.commands._common.get_cookies",
-            lambda source, force_refresh=False: (_ for _ in ()).throw(NoCookieError(source)),
+            lambda source, force_refresh=False, browser_profile_dir=None: (_ for _ in ()).throw(NoCookieError(source)),
         )
 
         result = runner.invoke(cli, ["read", "abc", "--yaml"])

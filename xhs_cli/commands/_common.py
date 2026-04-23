@@ -31,9 +31,20 @@ def _cookie_source(ctx) -> str:
     return ctx.obj.get("cookie_source", "auto") if ctx.obj else "auto"
 
 
+def _browser_profile_dir(ctx) -> str | None:
+    if not ctx or not ctx.obj:
+        return None
+    value = ctx.obj.get("browser_profile_dir")
+    return str(value).strip() if value else None
+
+
 def get_client(ctx, *, force_refresh: bool = False) -> XhsClient:
     """Get a local client from the click context."""
-    _browser, cookies = get_cookies(_cookie_source(ctx), force_refresh=force_refresh)
+    _browser, cookies = get_cookies(
+        _cookie_source(ctx),
+        force_refresh=force_refresh,
+        browser_profile_dir=_browser_profile_dir(ctx),
+    )
     return XhsClient(cookies)
 
 

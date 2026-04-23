@@ -156,6 +156,18 @@ xiaohongshu-cli supports multiple authentication methods:
 Use `--cookie-source <browser>` to specify a browser explicitly, or `--qrcode` for browser-assisted QR login.
 Other authenticated commands automatically retry once with fresh browser cookies when the saved session has expired.
 
+### Explicit profile and config dir
+
+- `--browser-profile-dir <PATH>` lets you read cookies from a specific Chrome-family profile such as `Profile 1`
+- `XHS_CONFIG_DIR` overrides the default `~/.xiaohongshu-cli` config directory when you want an isolated persistent session
+
+Example:
+
+```bash
+XHS_CONFIG_DIR=/tmp/xhs-cli \
+xhs --cookie-source chrome --browser-profile-dir "/Users/me/Library/Application Support/Google/Chrome/Profile 1" status
+```
+
 ### Cookie TTL
 
 Saved cookies are valid for **7 days** by default. After that, the client automatically attempts to refresh from the browser. If browser extraction fails, the existing cookies are used with a warning.
@@ -174,6 +186,8 @@ After any listing command such as `search`, `feed`, `hot`, `user-posts`, `favori
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OUTPUT` | `auto` | Output format: `json`, `yaml`, `rich`, or `auto` (→ YAML when non-TTY) |
+| `XHS_CONFIG_DIR` | `~/.xiaohongshu-cli` | Override the persistent config/session directory |
+| `XHS_BROWSER_PROFILE_DIR` | unset | Default Chrome-family profile dir for cookie extraction |
 ## Rate Limiting & Anti-Detection
 
 xiaohongshu-cli includes comprehensive anti-risk-control measures designed to minimize detection:

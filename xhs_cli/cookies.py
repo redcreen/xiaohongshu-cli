@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -13,7 +14,14 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-from .constants import CONFIG_DIR_NAME, COOKIE_FILE, INDEX_CACHE_FILE, TOKEN_CACHE_FILE
+from .constants import (
+    BROWSER_PROFILE_DIR_ENV,
+    CONFIG_DIR_ENV,
+    CONFIG_DIR_NAME,
+    COOKIE_FILE,
+    INDEX_CACHE_FILE,
+    TOKEN_CACHE_FILE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +37,8 @@ NOTE_CONTEXT_TTL_SECONDS = 86400
 
 def get_config_dir() -> Path:
     """Get or create config directory."""
-    config_dir = Path.home() / CONFIG_DIR_NAME
+    configured = (os.environ.get(CONFIG_DIR_ENV) or "").strip()
+    config_dir = Path(configured).expanduser() if configured else Path.home() / CONFIG_DIR_NAME
     config_dir.mkdir(parents=True, exist_ok=True)
     return config_dir
 
@@ -347,7 +356,28 @@ def _get_browser_loader(source: str):
     return loader
 
 
-def _extract_in_process(source: str) -> dict[str, str] | None:
+def _resolve_explicit_browser_paths(browser_profile_dir: str | None) -> tuple[str, str] | None:
+    configured = str(browser_profile_dir or os.environ.get(BROWSER_PROFILE_DIR_ENV) or "").strip()
+    if not configured:
+        return None
+
+    profile_dir = Path(configured).expanduser().resolve()
+    cookie_candidates = (
+        profile_dir / "Cookies",
+        profile_dir / "Network" / "Cookies",
+    )
+    cookie_file = next((candidate for candidate in cookie_candidates if candidate.exists()), None)
+    key_file = profile_dir.parent / "Local State"
+    if cookie_file is None or not key_file.exists():
+        logger.debug(
+            "Explicit browser profile dir is missing Chrome cookie inputs: %s",
+            profile_dir,
+        )
+        return None
+    return str(cookie_file), str(key_file)
+
+
+def _extract_in_process(source: str, *, browser_profile_dir: str | None = None) -> dict[str, str] | None:
     """Extract cookies in-process for macOS Keychain compatibility."""
     try:
         loader = _get_browser_loader(source)
@@ -359,7 +389,11 @@ def _extract_in_process(source: str) -> dict[str, str] | None:
         return None
 
     try:
-        jar = loader(domain_name=".xiaohongshu.com")
+        kwargs: dict[str, str] = {"domain_name": ".xiaohongshu.com"}
+        explicit_paths = _resolve_explicit_browser_paths(browser_profile_dir)
+        if explicit_paths and source in {"chrome", "chromium", "brave", "edge"}:
+            kwargs["cookie_file"], kwargs["key_file"] = explicit_paths
+        jar = loader(**kwargs)
     except Exception as exc:
         logger.debug("%s in-process extraction failed: %s", source, exc)
         return None
@@ -373,7 +407,7 @@ def _extract_in_process(source: str) -> dict[str, str] | None:
     return None
 
 
-def _extract_via_subprocess(source: str) -> dict[str, str] | None:
+def _extract_via_subprocess(source: str, *, browser_profile_dir: str | None = None) -> dict[str, str] | None:
     """Extract cookies via subprocess to avoid browser SQLite locks."""
     extract_script = '''
 import json, sys
@@ -390,7 +424,11 @@ if not loader or not callable(loader):
     sys.exit(0)
 
 try:
-    cj = loader(domain_name=".xiaohongshu.com")
+    kwargs = {"domain_name": ".xiaohongshu.com"}
+    if len(sys.argv) > 3 and sys.argv[2] and sys.argv[3]:
+        kwargs["cookie_file"] = sys.argv[2]
+        kwargs["key_file"] = sys.argv[3]
+    cj = loader(**kwargs)
     cookies = {c.name: c.value for c in cj if "xiaohongshu.com" in (c.domain or "")}
     if cookies.get("a1"):
         print(json.dumps({"browser": source, "cookies": cookies}))
@@ -401,8 +439,11 @@ except Exception as e:
 '''
 
     try:
+        explicit_paths = _resolve_explicit_browser_paths(browser_profile_dir)
+        cookie_file = explicit_paths[0] if explicit_paths else ""
+        key_file = explicit_paths[1] if explicit_paths else ""
         result = subprocess.run(
-            [sys.executable, "-c", extract_script, source],
+            [sys.executable, "-c", extract_script, source, cookie_file, key_file],
             capture_output=True,
             text=True,
             timeout=15,
@@ -427,7 +468,11 @@ except Exception as e:
         return None
 
 
-def extract_browser_cookies(source: str = "auto") -> tuple[str, dict[str, str]] | None:
+def extract_browser_cookies(
+    source: str = "auto",
+    *,
+    browser_profile_dir: str | None = None,
+) -> tuple[str, dict[str, str]] | None:
     """
     Extract XHS cookies from browser using browser-cookie3.
 
@@ -437,10 +482,10 @@ def extract_browser_cookies(source: str = "auto") -> tuple[str, dict[str, str]] 
     Returns ``(browser_name, cookies)`` on success, or ``None``.
     """
     if source != "auto":
-        cookies = _extract_in_process(source)
+        cookies = _extract_in_process(source, browser_profile_dir=browser_profile_dir)
         if cookies:
             return source, cookies
-        cookies = _extract_via_subprocess(source)
+        cookies = _extract_via_subprocess(source, browser_profile_dir=browser_profile_dir)
         if cookies:
             return source, cookies
         return None
@@ -456,10 +501,10 @@ def extract_browser_cookies(source: str = "auto") -> tuple[str, dict[str, str]] 
 
     def _try_browser(browser: str) -> tuple[str, dict[str, str]] | None:
         logger.debug("Auto-detect: trying %s …", browser)
-        cookies = _extract_in_process(browser)
+        cookies = _extract_in_process(browser, browser_profile_dir=browser_profile_dir)
         if cookies:
             return browser, cookies
-        cookies = _extract_via_subprocess(browser)
+        cookies = _extract_via_subprocess(browser, browser_profile_dir=browser_profile_dir)
         if cookies:
             return browser, cookies
         return None
@@ -479,7 +524,10 @@ def extract_browser_cookies(source: str = "auto") -> tuple[str, dict[str, str]] 
 
 
 def get_cookies(
-    cookie_source: str = "auto", *, force_refresh: bool = False
+    cookie_source: str = "auto",
+    *,
+    force_refresh: bool = False,
+    browser_profile_dir: str | None = None,
 ) -> tuple[str, dict[str, str]]:
     """
     Multi-strategy cookie acquisition with TTL-based auto-refresh.
@@ -500,7 +548,10 @@ def get_cookies(
                     "Cookies older than %d days, attempting browser refresh",
                     COOKIE_TTL_DAYS,
                 )
-                result = extract_browser_cookies(cookie_source)
+                result = extract_browser_cookies(
+                    cookie_source,
+                    browser_profile_dir=browser_profile_dir,
+                )
                 if result:
                     save_cookies(result[1])
                     return result
@@ -513,7 +564,10 @@ def get_cookies(
     # 2. Try browser extraction
     from .exceptions import NoCookieError
 
-    result = extract_browser_cookies(cookie_source)
+    result = extract_browser_cookies(
+        cookie_source,
+        browser_profile_dir=browser_profile_dir,
+    )
     if result:
         save_cookies(result[1])
         return result
