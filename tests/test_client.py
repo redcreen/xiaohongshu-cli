@@ -165,8 +165,8 @@ class TestReadingEndpointBehavior:
                 raise SessionExpiredError()
             return {"comments": [{"id": "comment-1"}], "has_more": False}
 
-        def fake_get_note_detail(self, note_id, xsec_token="", xsec_source=""):
-            calls.append(("warm", {"note_id": note_id, "xsec_token": xsec_token, "xsec_source": xsec_source}))
+        def fake_get_note_detail(self, note_id, xsec_token="", xsec_source="", note_url=""):
+            calls.append(("warm", {"note_id": note_id, "xsec_token": xsec_token, "xsec_source": xsec_source, "note_url": note_url}))
             cache_note_context(note_id, "token-refreshed", xsec_source or "pc_search")
             return {"note_id": note_id}
 
@@ -193,7 +193,7 @@ class TestReadingEndpointBehavior:
         )
         assert calls[1] == (
             "warm",
-            {"note_id": "note-123", "xsec_token": "token-old", "xsec_source": "pc_search"},
+            {"note_id": "note-123", "xsec_token": "token-old", "xsec_source": "pc_search", "note_url": ""},
         )
         assert calls[2] == (
             "/api/sns/web/v2/comment/page",
@@ -357,3 +357,39 @@ class TestReadingEndpointBehavior:
 
         assert result["items"][0]["note_card"]["title"] == "html-ok"
         assert get_cached_note_context("note-123") == {}
+
+    def test_get_note_detail_refreshes_xsec_context_after_empty_feed_items(self, monkeypatch):
+        calls = []
+        cache_note_context("note-123", "stale-token", "pc_search")
+
+        def fake_get_note_by_id(self, note_id, xsec_token="", xsec_source="pc_feed"):
+            calls.append(("feed", note_id, xsec_token, xsec_source))
+            if xsec_token == "stale-token":
+                return {"items": []}
+            return {"items": [{"note_card": {"title": "feed-ok"}}]}
+
+        def fake_resolve_xsec_context(self, note_id, preferred_token="", preferred_source="", note_url=""):
+            calls.append(("resolve", note_id, preferred_token, preferred_source, note_url))
+            cache_note_context(note_id, "fresh-token", preferred_source or "pc_search")
+            return "fresh-token", preferred_source or "pc_search"
+
+        def fake_get_note_from_html(self, note_id, xsec_token="", xsec_source="pc_feed"):
+            calls.append(("html", note_id, xsec_token, xsec_source))
+            return {"items": [{"note_card": {"title": "html-fallback"}}]}
+
+        monkeypatch.setattr(XhsClient, "get_note_by_id", fake_get_note_by_id)
+        monkeypatch.setattr(XhsClient, "resolve_xsec_context", fake_resolve_xsec_context)
+        monkeypatch.setattr(XhsClient, "get_note_from_html", fake_get_note_from_html)
+
+        client = XhsClient({"a1": "cookie"})
+        try:
+            result = client.get_note_detail("note-123")
+        finally:
+            client.close()
+
+        assert result["items"][0]["note_card"]["title"] == "feed-ok"
+        assert calls == [
+            ("feed", "note-123", "stale-token", "pc_search"),
+            ("resolve", "note-123", "", "pc_search", ""),
+            ("feed", "note-123", "fresh-token", "pc_search"),
+        ]

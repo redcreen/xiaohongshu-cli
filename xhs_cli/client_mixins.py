@@ -194,6 +194,15 @@ def get_search_session_stats() -> dict[str, Any]:
 class ReadingEndpointsMixin:
     """Read-only note, profile, and discovery endpoints."""
 
+    @staticmethod
+    def _has_note_detail_content(payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        items = payload.get("items")
+        if isinstance(items, list) and items:
+            return True
+        return bool(payload.get("noteId") or payload.get("note_id") or payload.get("title"))
+
     def _search_request_id(self) -> str:
         return f"{random.randint(1_000_000_000, 2_147_483_647)}-{int(time.time() * 1000)}"
 
@@ -219,11 +228,28 @@ class ReadingEndpointsMixin:
         )
         return resp.text, str(resp.url)
 
+    def _fetch_note_reference_html(self, note_id: str, note_url: str = "") -> tuple[str, str]:
+        reference = str(note_url or "").strip()
+        if not reference or "xiaohongshu.com" not in reference:
+            return self._fetch_note_html(note_id)
+
+        resp = self._request_with_retry(
+            "GET",
+            reference,
+            headers={
+                "user-agent": USER_AGENT,
+                "referer": f"{HOME_URL}/",
+                "cookie": cookies_to_string(self.cookies),
+            },
+        )
+        return resp.text, str(resp.url)
+
     def resolve_xsec_context(
         self,
         note_id: str,
         preferred_token: str = "",
         preferred_source: str = "",
+        note_url: str = "",
     ) -> tuple[str, str]:
         """Resolve xsec_token/xsec_source from input, cache, or note page metadata."""
         if preferred_token:
@@ -234,7 +260,7 @@ class ReadingEndpointsMixin:
         if cached.get("token"):
             return cached["token"], cached.get("source", "")
 
-        html, _final_url = self._fetch_note_html(note_id)
+        html, final_url = self._fetch_note_reference_html(note_id, note_url=note_url)
         patterns = [
             r'"xsec_token"\s*:\s*"([^"]+)"',
             r"xsec_token=([^&\"']+)",
@@ -245,7 +271,11 @@ class ReadingEndpointsMixin:
             if match:
                 token = match.group(1)
                 source_match = re.search(r"xsec_source=([^&\"']+)", html)
-                source = source_match.group(1) if source_match else preferred_source
+                if source_match:
+                    source = source_match.group(1)
+                else:
+                    final_source_match = re.search(r"xsec_source=([^&\"']+)", final_url)
+                    source = final_source_match.group(1) if final_source_match else preferred_source
                 cache_note_context(note_id, token, source)
                 return token, source
         return "", preferred_source
@@ -346,6 +376,7 @@ class ReadingEndpointsMixin:
         note_id: str,
         xsec_token: str = "",
         xsec_source: str = "",
+        note_url: str = "",
     ) -> dict[str, Any]:
         """Read a note via the best available channel.
 
@@ -359,13 +390,28 @@ class ReadingEndpointsMixin:
         used_cached_context = not xsec_token and bool(cached.get("token"))
         if token:
             try:
-                return self.get_note_by_id(note_id, xsec_token=token, xsec_source=source)
+                response = self.get_note_by_id(note_id, xsec_token=token, xsec_source=source)
+                if self._has_note_detail_content(response):
+                    return response
+                logger.info("Feed API returned no note items, refreshing xsec context from HTML")
             except (NeedVerifyError, XhsApiError) as exc:
                 logger.info("Feed API failed (%s), falling back to HTML", exc)
-                if used_cached_context:
-                    invalidate_note_context(note_id)
-                    token = ""
-        return self.get_note_from_html(note_id, xsec_token=token or "", xsec_source=source)
+            invalidate_note_context(note_id)
+            refreshed_token, refreshed_source = self.resolve_xsec_context(note_id, "", source, note_url=note_url)
+            if refreshed_token:
+                try:
+                    response = self.get_note_by_id(note_id, xsec_token=refreshed_token, xsec_source=refreshed_source or source)
+                    if self._has_note_detail_content(response):
+                        return response
+                    logger.info("Refreshed xsec context still returned no items; falling back to HTML")
+                except (NeedVerifyError, XhsApiError) as exc:
+                    logger.info("Refreshed feed API failed (%s), falling back to HTML", exc)
+            elif used_cached_context:
+                token = ""
+        response = self.get_note_from_html(note_id, xsec_token="", xsec_source=source)
+        if self._has_note_detail_content(response):
+            return response
+        raise XhsApiError("No note data found after refreshing xsec context")
 
     def get_home_feed(self, category: str = "homefeed_recommend") -> dict[str, Any]:
         return self._main_api_post("/api/sns/web/v1/homefeed", {
@@ -392,10 +438,11 @@ class ReadingEndpointsMixin:
         xsec_token: str = "",
         top_comment_id: str = "",
         xsec_source: str = "",
+        note_url: str = "",
     ) -> Any:
         cached = get_cached_note_context(note_id)
         used_cached_context = not xsec_token and bool(cached.get("token"))
-        token, source = self.resolve_xsec_context(note_id, xsec_token, xsec_source)
+        token, source = self.resolve_xsec_context(note_id, xsec_token, xsec_source, note_url=note_url)
         if not token:
             raise XhsApiError(
                 "Could not resolve xsec_token for comments. Pass a full note URL or --xsec-token explicitly."
@@ -421,8 +468,8 @@ class ReadingEndpointsMixin:
             raise
         except SessionExpiredError:
             # Warm the note detail in-process so response cookies and token cache can refresh
-            self.get_note_detail(note_id, xsec_token=token, xsec_source=source)
-            refreshed_token, refreshed_source = self.resolve_xsec_context(note_id, "", source)
+            self.get_note_detail(note_id, xsec_token=token, xsec_source=source, note_url=note_url)
+            refreshed_token, refreshed_source = self.resolve_xsec_context(note_id, "", source, note_url=note_url)
             if not refreshed_token:
                 raise
             if refreshed_source:
@@ -432,7 +479,7 @@ class ReadingEndpointsMixin:
             if not used_cached_context:
                 raise
             invalidate_note_context(note_id)
-            refreshed_token, refreshed_source = self.resolve_xsec_context(note_id, "", xsec_source)
+            refreshed_token, refreshed_source = self.resolve_xsec_context(note_id, "", xsec_source, note_url=note_url)
             if not refreshed_token:
                 raise
             if refreshed_source:
@@ -444,6 +491,7 @@ class ReadingEndpointsMixin:
         note_id: str,
         xsec_token: str = "",
         xsec_source: str = "",
+        note_url: str = "",
         max_pages: int = 20,
     ) -> dict[str, Any]:
         all_comments: list[dict[str, Any]] = []
@@ -456,6 +504,7 @@ class ReadingEndpointsMixin:
                 cursor=cursor,
                 xsec_token=xsec_token,
                 xsec_source=xsec_source,
+                note_url=note_url,
             )
             if not isinstance(data, dict):
                 break

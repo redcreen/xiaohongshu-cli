@@ -87,6 +87,7 @@ def search(ctx, keyword: str, sort: str, note_type: str, page: int, as_json: boo
 def read(ctx, id_or_url: str, xsec_token: str, as_json: bool, as_yaml: bool):
     """Read a note by ID, URL, or short index."""
     note_id, token, url_source = resolve_note_reference(id_or_url, xsec_token=xsec_token)
+    note_url = id_or_url if "xiaohongshu.com" in id_or_url else ""
     xsec_source = url_source or "pc_feed"
     if token:
         cache_note_context(note_id, token, xsec_source)
@@ -95,6 +96,8 @@ def read(ctx, id_or_url: str, xsec_token: str, as_json: bool, as_yaml: bool):
         kwargs = {"xsec_token": token}
         if url_source:
             kwargs["xsec_source"] = url_source
+        if note_url:
+            kwargs["note_url"] = note_url
         return client.get_note_detail(note_id, **kwargs)
 
     handle_command(
@@ -116,6 +119,7 @@ def read(ctx, id_or_url: str, xsec_token: str, as_json: bool, as_yaml: bool):
 def comments(ctx, id_or_url: str, cursor: str, xsec_token: str, fetch_all: bool, as_json: bool, as_yaml: bool):
     """View comments on a note by ID, URL, or short index."""
     note_id, token, url_source = resolve_note_reference(id_or_url, xsec_token=xsec_token)
+    note_url = id_or_url if "xiaohongshu.com" in id_or_url else ""
     xsec_source = url_source or "pc_feed"
     if token:
         cache_note_context(note_id, token, xsec_source)
@@ -124,6 +128,8 @@ def comments(ctx, id_or_url: str, cursor: str, xsec_token: str, fetch_all: bool,
         common_kwargs = {"xsec_token": token}
         if url_source:
             common_kwargs["xsec_source"] = url_source
+        if note_url:
+            common_kwargs["note_url"] = note_url
         if fetch_all:
             return client.get_all_comments(note_id, **common_kwargs)
         return client.get_comments(
